@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Android Toolbox</string>
+    <string name="app_persisting">\@string/app_name persisting</string>
+</resources>
