@@ -1,777 +1,419 @@
 package com.jifalops.toolbox.android.deviceinfoelement;
 
-import android.content.Context;
+import android.text.TextUtils;
 import android.util.Log;
 
-import com.deviceinfoapp.util.BackgroundRepeatingTask;
-import com.deviceinfoapp.util.ShellHelper;
+import com.gstv.android.logging.GSLog;
+import com.gstv.dtv.player.Constants;
+import com.jifalops.toolbox.android.util.ShellHelper;
 
 import java.io.File;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
-//TODO exact current frequency???
-public class Cpu extends ActiveElement {
+//TODO exact current frequency??
+public class Cpu {
+	static final String TAG = Cpu.class.getSimpleName();
 
-    private static final String CPU_INFO_LOCATION = "/sys/devices/system/cpu/cpu";
+    private static final String CPU_INFO_LOCATION = "/sys/devices/system/cpu/";
     private static final String CPU_INFO_PROC = "cpuinfo";
     private static final String CPU_STAT_PROC = "stat";
+    private static final String PREFIX = "cpu";
+    private static final Pattern WHITESPACE = Pattern.compile("\\s+");
 
-    public static final int FREQUENCY_HIGH = 1000;
-    public static final int FREQUENCY_MEDIUM = 2000;
-    public static final int FREQUENCY_LOW = 5000;
+    private Stat stat, prevStat;
+    private final Info info;
+	private final List<LogicalCpu> cores = new ArrayList<>();
 
-    private static final int ACTIVE_ACTIONS = 1;
-    public static final int ACTION_UPDATED = 0;
-
-    public interface Callbacks extends ActiveElement.Callbacks {
-		void onCpuUpdated(int numCpuStatsUpdated);
+	public Cpu() {
+        info = new Info();
+        checkCores();
+        updateStats();
 	}
 
-	private List<String> mCpuinfo;
-	private final List<LogicalCpu> mLogicalCpus;
-	private final CpuStat mCpuStat;
-	
-	private int mNumStatsUpdated;
+    public Usage checkUsage() {
+        updateStats();
+        return new Usage(stat, prevStat);
+    }
 
-	private final BackgroundRepeatingTask mUpdateTask;
-	
-	public Cpu(Context context, Callbacks callbacks) {
-		super(context, callbacks);
-		mCpuinfo = ShellHelper.getProc(CPU_INFO_PROC);
-		mLogicalCpus = new ArrayList<LogicalCpu>();
-		mCpuStat = new CpuStat();
-		mUpdateTask = new BackgroundRepeatingTask(new Runnable() {			
-			@Override
-			public void run() {
-                // Throttle set by frequency (because it's not a system event but my own)
-				mCpuinfo = ShellHelper.getProc(CPU_INFO_PROC);
-				updateCpuStats();
-				for (LogicalCpu c : mLogicalCpus) {
-					c.updateFrequency();
-					c.updateGovernor();
-					c.updateTimeInFrequency();
-					c.updateTotalTransitions();
-				}
-			}
-		});
+    public Info getInfo() {
+        return info;
+    }
 
-		File f = null;
-		int i = 0;
-		while (true) {
-			f = new File(CPU_INFO_LOCATION + i);
-			if (f.exists()) mLogicalCpus.add(new LogicalCpu(f, i));
-			else break;
-			++i;
-		}
+    public List<LogicalCpu> getCores() {
+        return cores;
+    }
 
-        mUpdateTask.setInterval(FREQUENCY_MEDIUM);
-        mUpdateTask.setCallback(new Runnable() {
-            @Override
-            public void run() {
-                setActionTime(ACTION_UPDATED);
-                ((Callbacks) mCallbacks).onCpuUpdated(mNumStatsUpdated);
-            }
-        });
+    /**
+     * Checks the number of logical CPUs used in the system.
+     * This is typically the number of cores on the CPU, but can also work with multiple processors.
+     */
+    private int checkCores() {
+        cores.clear();
+        File f;
+        int i = 0;
+        while (true) {
+            f = new File(CPU_INFO_LOCATION + PREFIX + i);
+            if (f.exists()) cores.add(new LogicalCpu(f, i));
+            else break;
+            ++i;
+        }
+        return cores.size();
+    }
 
-        setActiveActionCount(ACTIVE_ACTIONS);
-	}	
-	
-	public void setUpdateInterval(int milliseconds) {
-		mUpdateTask.setInterval(milliseconds);
-	}
-	
-	public int getUpdateInterval() {
-		return mUpdateTask.getInterval();
-	}
-	
-	public List<String> getCpuinfo() {
-		return mCpuinfo;
-	}
-	
-	public CpuStat getCpuStat() {
-		return mCpuStat;
-	}
-	
-	public List<LogicalCpu> getLogicalCpus() {
-		return mLogicalCpus;
-	}
-	
-	public int getNumStatsUpdated() {
-		return mNumStatsUpdated;
-	}
-	
-	/** Updates the CpuStat for this and all logical CPUs. */
-	private void updateCpuStats() {
-		mNumStatsUpdated = 0;
+	/** Updates the Stat for the overall and all logical CPUs. */
+	private void updateStats() {
 		List<String> stats = ShellHelper.getProc(CPU_STAT_PROC);
-		if (stats == null || stats.isEmpty()) return;
-		
-		String[] parts = null;
-		String line = null;
-		for (int i = 0; i < stats.size(); ++i) {
-			line = stats.get(i);
-			if (line.startsWith("cpu")) { //TODO if 0% usage the cpu is omitted
-				parts = line.split("\\s+");				
-				if (parts[0].endsWith(String.valueOf(i - 1))) {
-					if (mLogicalCpus.size() >= i &&
-							mLogicalCpus.get(i - 1).getCpuStat().update(parts)) {					
-						++mNumStatsUpdated;
-					}
-				}
-				else if (mCpuStat.update(parts)) {
-					++mNumStatsUpdated;
-				}
-			}
+        for (String line : stats) {
+            if (line.startsWith(PREFIX)) { //TODO if 0% usage the cpu can be omitted
+                Stat stat = new Stat(line);
+                if (PREFIX.equals(stat.id)) {
+                    // This is the overall CPU stat
+                    prevStat = this.stat;
+                    this.stat = stat;
+                } else {
+                    // This is a component CPU stat
+                    int id = Integer.valueOf(stat.id.substring(PREFIX.length()));
+                    LogicalCpu cpu = cores.get(id);
+                    cpu.prevStat = cpu.stat;
+                    cpu.stat = stat;
+                }
+            }
 		}
 	}
-	
 	
 	public class LogicalCpu {
-		private final String LOG_TAG = LogicalCpu.class.getSimpleName();
-
-        private static final String MAX_FREQUENCY = "/cpufreq/cpuinfo_max_freq";
-        private static final String MIN_FREQUENCY = "/cpufreq/cpuinfo_min_freq";
-        private static final String CURRENT_FREQUENCY = "/cpufreq/scaling_cur_freq";
+        private static final String MAX_FREQUENCY = 		"/cpufreq/cpuinfo_max_freq";
+        private static final String MIN_FREQUENCY = 		"/cpufreq/cpuinfo_min_freq";
+        private static final String CURRENT_FREQUENCY = 	"/cpufreq/scaling_cur_freq";
         private static final String AVAILABLE_FREQUENCIES = "/cpufreq/scaling_available_frequencies";
-        private static final String AVAILABLE_GOVERNERS = "/cpufreq/scaling_available_governors";
-        private static final String GOVERNER = "/cpufreq/scaling_governor";
-        private static final String DRIVER = "/cpufreq/scaling_driver";
-        private static final String TRANSITION_LATENCY = "/cpufreq/cpuinfo_transition_latency";
-        private static final String TRANSITIONS = "/cpufreq/stats/total_trans";
-        private static final String TIME_IN_FREQUENCY = "/cpufreq/stats/time_in_state";
+        private static final String AVAILABLE_GOVERNERS = 	"/cpufreq/scaling_available_governors";
+        private static final String GOVERNOR = 				"/cpufreq/scaling_governor";
+        private static final String DRIVER = 				"/cpufreq/scaling_driver";
+        private static final String TRANSITION_LATENCY = 	"/cpufreq/cpuinfo_transition_latency";
+        private static final String TRANSITIONS = 			"/cpufreq/stats/total_trans";
+        private static final String TIME_IN_FREQUENCY = 	"/cpufreq/stats/time_in_state";
 
-        //		public final float bogoMips;
-		private final int mId;
-		private final File mRoot;
-		private final CpuStat mCpuStat;
+        //public final float bogoMips;
+		public final int id;
+		public final File dir;
+		private Stat stat, prevStat;
 		
-		private int mMaxFrequency;
-		private int mMinFrequency;
-		private int mCurFrequency;
-		private int[] mAvailableFrequencies;
-		private String[] mAvailableGovernors;
-		private String mCurGoverner;
-		private String mDriver;
-		private int mTransitionLatency;
-		private int mTotalTransitions;
-		private int[][] mTimeInFrequencies;
+		public final int maxFrequency;
+        public final int minFrequency;
+		public final int[] availableFrequencies;
+		public final String[] availableGovernors;
+		public final String curGoverner;
+		public final String driver;
+		public final int transitionLatency;
 		
 		
 		/** A file pointing to a logical cpu structure
 		 * in the file system, such as /sys/devices/system/cpu/cpu0. */
-		public LogicalCpu(File file, int id) {	
-			if (mLogicalCpus.size() > id) {
-				throw new AssertionError("Logical CPU with id " + id + " already exists!");
-			}
-			
-			mRoot = file;
-			mId = id;
-			mCpuStat = new CpuStat(id);
+		public LogicalCpu(File dir, int id) {
+			this.dir = dir;
+			this.id = id;
+            maxFrequency = checkMaxFrequency();
+            minFrequency = checkMinFrequency();
+            availableFrequencies = checkAvailableFrequencies();
+            availableGovernors = checkAvailableGovernors();
+            curGoverner = checkCurrentGoverner();
+            driver = checkDriver();
+            transitionLatency = checkTransitionLatency();
 		}
-		
-		public CpuStat getCpuStat() {
-			return mCpuStat;
-		}
-		
-		/** Get the id of this logical cpu. */
-		public int getId() {
-			return mId;
-		}
-		
-		public File getRoot() {
-			return mRoot;
-		}
+
+        public Usage checkUsage() {
+            updateStats();
+            return new Usage(stat, prevStat);
+        }
+
+        /** Get the current frequency in MHz */
+        public int checkCurrentFrequency() {
+            int freq = 0;
+            List<String> list = ShellHelper.cat(dir.getAbsolutePath() + CURRENT_FREQUENCY);
+            if (list.size() > 0) {
+                try { freq = Integer.valueOf(list.get(0)); }
+                catch (NumberFormatException ignored) {}
+                freq /= 1000;
+            }
+            return freq;
+        }
+
+        /** Get the total number of frequency transitions */
+        public int checkTotalTransitions() {
+            int value = 0;
+            List<String> list = ShellHelper.cat(dir.getAbsolutePath() + TRANSITIONS);
+            if (list.size() > 0) {
+                try {
+                    value = Integer.valueOf(list.get(0));
+                } catch (NumberFormatException ignored) {}
+            }
+            return value;
+        }
+
+        /** Get the total amount of time spent in frequency transitions in seconds */
+        public float checkTimeInTransitions() {
+            return (float) ((long) checkTotalTransitions() * (long) checkTransitionLatency() / 1E9);
+        }
+
+        /** Get a list of the total time (in Jiffies) spent at each frequency (in MHz) */
+        public int[][] checkTimeInFrequency() {
+            List<String> list = ShellHelper.cat(dir.getAbsolutePath() + TIME_IN_FREQUENCY);
+            int len = list.size();
+            if (len > 0) {
+                int[][] times = new int[len][2];
+                String[] parts;
+                for (int i = 0; i < len; ++i) {
+                    parts = WHITESPACE.split(list.get(i));
+                    if (parts.length != 2) {
+                        Log.e(TAG, "time in state did not have exactly 2 parts.");
+                        continue;
+                    }
+                    int freq = 0, time = 0;
+                    try {
+                        freq = Integer.valueOf(parts[0]) / 1000;
+                        time = Integer.valueOf(parts[1]);
+                    } catch (NumberFormatException ignored) {}
+                    times[i][0] = freq;
+                    times[i][1] = time;
+                }
+                return times;
+            } else return new int[0][0];
+        }
 		
 		/** Get the maximum frequency in MHz */
-		public int getMaxFrequency() {
-			if (mMaxFrequency == 0) {
-				List<String> list = ShellHelper.cat(
-					mRoot.getAbsolutePath() + MAX_FREQUENCY);
-				if (list == null || list.isEmpty()) return 0;
-				int value = 0;
-				try { value = Integer.valueOf(list.get(0)); }
-				catch (NumberFormatException ignored) {}
-				mMaxFrequency = value / 1000;
-			}
-			return mMaxFrequency;
+		private int checkMaxFrequency() {
+            int freq = 0;
+            List<String> list = ShellHelper.cat(dir.getAbsolutePath() + MAX_FREQUENCY);
+            if (list.size() > 0) {
+                try { freq = Integer.valueOf(list.get(0)); }
+                catch (NumberFormatException ignored) {}
+                freq /= 1000;
+            }
+			return freq;
 		}
 		
 		/** Get the minimum frequency in MHz */
-		public int getMinFrequency() {
-			if (mMinFrequency == 0) {
-				List<String> list = ShellHelper.cat(
-					mRoot.getAbsolutePath() + MIN_FREQUENCY);
-				if (list == null || list.isEmpty()) return 0;
-				int value = 0;
-				try { value = Integer.valueOf(list.get(0)); }
-				catch (NumberFormatException ignored) {}
-				mMinFrequency = value / 1000;
-			}
-			return mMinFrequency;
-		}
+        private int checkMinFrequency() {
+            int freq = 0;
+            List<String> list = ShellHelper.cat(dir.getAbsolutePath() + MIN_FREQUENCY);
+            if (list.size() > 0) {
+                try { freq = Integer.valueOf(list.get(0)); }
+                catch (NumberFormatException ignored) {}
+                freq /= 1000;
+            }
+            return freq;
+        }
 		
-		/** Get the current frequency in MHz */
-		public int getFrequency() {
-			return mCurFrequency;
-		}	
-		
-		public void updateFrequency() {
-			List<String> list = ShellHelper.cat(
-				mRoot.getAbsolutePath() + CURRENT_FREQUENCY);
-			if (list == null || list.isEmpty()) return;
-			int value = 0;
-			try { value = Integer.valueOf(list.get(0)); }
-			catch (NumberFormatException ignored) {}
-			mCurFrequency =  value / 1000;
-		}
-		
+
 		/** Get the available frequencies in MHz */
-		public int[] getAvailableFrequencies() {
-			if (mAvailableFrequencies == null) {
-				List<String> list = ShellHelper.cat(
-					mRoot.getAbsolutePath() + AVAILABLE_FREQUENCIES);
-				if (list == null || list.isEmpty()) return null;
-				String[] results = list.get(0).split("\\s+");
-				if (results == null || results.length == 0) {
-					return null;
-				}
-				int len = results.length;
-				mAvailableFrequencies = new int[len];
-				for (int i = 0; i < len; ++i) {
-					int value = 0;
-					try { value = Integer.valueOf(results[i]); }
-					catch (NumberFormatException ignored) {}
-					mAvailableFrequencies[i] = value / 1000;
-				}
-			}
-			return mAvailableFrequencies;
+		private int[] checkAvailableFrequencies() {
+            List<String> list = ShellHelper.cat(dir.getAbsolutePath() + AVAILABLE_FREQUENCIES);
+            if (list.size() > 0) {
+                String[] results = WHITESPACE.split(list.get(0));
+                int len = results.length;
+                int[] freqs = new int[len];
+                for (int i = 0; i < len; ++i) {
+                    int value = 0;
+                    try { value = Integer.valueOf(results[i]); }
+                    catch (NumberFormatException ignored) {}
+                    freqs[i] = value / 1000;
+                }
+                return freqs;
+            } else return new int[0];
 		}
 		
 		/** Get the available governors */
-		public String[] getAvailableGovernors() {
-			if (mAvailableGovernors == null) {
-				List<String> list = ShellHelper.cat(
-					mRoot.getAbsolutePath() + AVAILABLE_GOVERNERS);
-				if (list == null || list.isEmpty()) return null;
-				mAvailableGovernors = list.get(0).split("\\s+");
-			}
-			return mAvailableGovernors;
+		private String[] checkAvailableGovernors() {
+            List<String> list = ShellHelper.cat(dir.getAbsolutePath() + AVAILABLE_GOVERNERS);
+            if (list.size() > 0) {
+                return WHITESPACE.split(list.get(0));
+            } else return new String[0];
 		}
-		
-		/** Get the current governor */
-		public String getGovernor() {
-			return mCurGoverner;
-		}
-		
-		public void updateGovernor() {
-			List<String> list = ShellHelper.cat(
-					mRoot.getAbsolutePath() + GOVERNER);
-			if (list == null || list.isEmpty()) return;
-			mCurGoverner = list.get(0);
-		}
+
+        private String checkCurrentGoverner() {
+            List<String> list = ShellHelper.cat(dir.getAbsolutePath() + GOVERNOR);
+            if (list.size() > 0) return list.get(0);
+            else return "";
+        }
 		
 		/** Get the current driver */
-		public String getDriver() {
-			if (mDriver == null) {
-				List<String> list = ShellHelper.cat(
-					mRoot.getAbsolutePath() + DRIVER);
-				if (list == null || list.isEmpty()) return null;
-				mDriver = list.get(0);
-			}
-			return mDriver;
+		private String checkDriver() {
+            List<String> list = ShellHelper.cat(dir.getAbsolutePath() + DRIVER);
+            if (list.size() > 0) return list.get(0);
+            else return "";
 		}
 		
 		/** Get the frequency transition latency in nano-seconds */
-		public int getTransitionLatency() {
-			if (mTransitionLatency == 0) {
-				List<String> list = ShellHelper.cat(
-					mRoot.getAbsolutePath() + TRANSITION_LATENCY);
-				if (list == null || list.isEmpty()) return 0;
-				int value = 0;
+		private int checkTransitionLatency() {
+			int value = 0;
+            List<String> list = ShellHelper.cat(dir.getAbsolutePath() + TRANSITION_LATENCY);
+            if (list.size() > 0) {
 				try { value = Integer.valueOf(list.get(0)); }
 				catch (NumberFormatException ignored) {}
-				mTransitionLatency = value;			
 			}
-			return mTransitionLatency;
-		}
-		
-		/** Get the total number of frequency transitions */
-		public int getTotalTransitions() {
-			return mTotalTransitions;
-		}
-		
-		public void updateTotalTransitions() {
-			List<String> list = ShellHelper.cat(
-					mRoot.getAbsolutePath() + TRANSITIONS);
-			if (list == null || list.isEmpty()) return;
-			int value = 0;
-			try { value = Integer.valueOf(list.get(0)); }
-			catch (NumberFormatException ignored) {}
-			mTotalTransitions = value;
-		}
-		
-		/** Get the total amount of time spent in frequency transitions in seconds */
-		public float getTimeInTransitions() {
-			return (float) ((long) getTotalTransitions() * (long) getTransitionLatency() / 1E9);
-		}
-
-		/** Get a list of the total time (in Jiffies) spent at each frequency (in MHz) */
-		public int[][] getTimeInFrequency() {
-			return mTimeInFrequencies;
-		}
-		
-		public void updateTimeInFrequency() {
-			List<String> list = ShellHelper.cat(
-					mRoot.getAbsolutePath() + TIME_IN_FREQUENCY);
-			if (list == null || list.isEmpty()) return;
-			int len = list.size();
-			int[][] times = new int[len][2];
-			String[] parts = null;
-			for (int i = 0; i < len; ++i) {
-				parts = list.get(i).split("\\s+");
-				if (parts.length != 2) {
-					Log.d(LOG_TAG, "time in state did not have exactly 2 parts.");
-					continue;
-				}
-				int freq = 0, time = 0;
-				try { 
-					freq = Integer.valueOf(parts[0]) / 1000;
-					time = Integer.valueOf(parts[1]);
-				}
-				catch (NumberFormatException ignored) {}
-				times[i][0] = freq;
-				times[i][1] = time;
-			}
-			mTimeInFrequencies = times;
-		}
-		
-		/** Get the total time (in Jiffies) spent a frequency given in MHz. */
-		public int getTimeInFrequency(int frequency) {
-			int[][] times = getTimeInFrequency();
-			if (times == null || times.length == 0) return 0;
-			for (int[] f : times) {
-				if (f[0] == frequency) return f[1];
-			}
-			return 0;
-		}
-		
-		/** Get a list of the percentage of time spent at each frequency (in MHz) */
-		public Map<Integer, Float> getPercentInFrequency() {
-			Map<Integer, Float> percents = new LinkedHashMap<Integer, Float>();
-			
-			int[][] times = getTimeInFrequency();
-			if (times == null || times.length == 0) return null;
-			
-			long total = 0;
-			
-			for (int i = 0; i < times.length; ++i) {
-				total += times[i][1];
-			}
-			
-			if (total == 0) return null;
-			
-			for (int i = 0; i < times.length; ++i) {
-				percents.put(times[i][0], (float) times[i][1] / total * 100);				
-			}
-			
-			return percents;
-		}
-		
-		/** Get the percentage of time spent a frequency given in MHz. */
-		public float getPercentInFrequency(int frequency) {
-			Map<Integer, Float> percents = getPercentInFrequency();
-			if (percents == null || percents.size() == 0) return 0;
-
-			for (int f : percents.keySet()) {
-				if (f == frequency) return percents.get(f);
-			}
-			return 0;
+			return value;
 		}
 	}
-	
-	public class CpuStat {
-		private final String LOG_TAG = CpuStat.class.getSimpleName();
 
-        private final String PREFIX = "cpu";
-		
-		public final int OVERALL_ID = -1;
-		
-		private int mId;
-		
-		
-		private long mUser = 0;
-		private long mNice = 0;
-		private long mSystem = 0;
-		private long mIdle = 0;
-		private long mIoWait = 0;
-		private long mIntr = 0;
-		private long mSoftIrq = 0;		
+
+	public static class Stat {
+        public final String id;
+		public final long user;
+		public final long nice;
+		public final long system;
+		public final long idle;
+		public final long ioWait;
+		public final long intr;
+		public final long softIrq;		
 		// The other two fields, Steal and Guest, seem to always be zero.
-		
-		
-		private long mUserPrevious = 0;
-		private long mNicePrevious = 0;
-		private long mSystemPrevious = 0;
-		private long mIdlePrevious = 0;
-		private long mIoWaitPrevious = 0;
-		private long mIntrPrevious = 0;
-		private long mSoftIrqPrevious = 0;
-		
-		public CpuStat() {
-			// The overall cpu stat.
-			mId = OVERALL_ID;
-		}
-		
-		public CpuStat(int id) {
-			// Cpu stat for a particular cpu.
-			mId = id;
-		}
-		
-		/** 
-		 * Update the cpu stats for this cpu.
-		 * @param parts
-		 * 		An array with at least 8 elements:<br>
-		 * 	cpu[id] user nice system idle io_wait intr soft_irq<br>
-		 * The id for cpu is optional.
-		 * @return whether the update completed successfully.
-		 */
-		private boolean update(String[] parts) {		
-			if (parts == null || parts.length < 8) {
-				Log.d(LOG_TAG, "invalid array length to perform update.");
-				return false;
-			}
-			
-			String value = PREFIX;
-			if (mId != OVERALL_ID) value += mId;
-			
-			if (!parts[0].equals(value)) {
-				Log.d(LOG_TAG, "Tried to perform update on wrong CpuStat. Got '" 
-						+ parts[0] + "', expected '" + value + "'.");
-				return false;
-			}
-			
-			long[] values = new long[7];
-			
-			try {				
-				for (int i = 0; i < 7; ++i) {
-					values[i] = Long.parseLong(parts[i + 1]);
-				}				
-			} 
-			catch (NumberFormatException ignored) {
-				return false;
-			}
-			
-			mUserPrevious = mUser;
-			mNicePrevious = mNice;
-			mSystemPrevious = mSystem;
-			mIdlePrevious = mIdle;
-			mIoWaitPrevious = mIoWait;
-			mIntrPrevious = mIntr;
-			mSoftIrqPrevious = mSoftIrq;
-			
-			mUser = values[0];
-			mNice = values[1];
-			mSystem = values[2];
-			mIdle = values[3];
-			mIoWait = values[4];
-			mIntr = values[5];
-			mSoftIrq = values[6];
-			
-			return true;
-		}
-		
-		public int getId() {
-			return mId;
-		}
-		
-		public float getUserPercent() {
-			float totalDif = getTotalDifference();
-			if (totalDif == 0) return 0;
-			return ((totalDif - (totalDif - getUserDifference())) / totalDif) * 100;
-		}
-		
-		public float getNicePercent() {
-			float totalDif = getTotalDifference();
-			if (totalDif == 0) return 0;
-			return ((totalDif - (totalDif - getNiceDifference())) / totalDif) * 100;
-		}
-		
-		public float getSystemPercent() {
-			float totalDif = getTotalDifference();
-			if (totalDif == 0) return 0;
-			return ((totalDif - (totalDif - getSystemDifference())) / totalDif) * 100;
-		}
-		
-		public float getIdlePercent() {
-			float totalDif = getTotalDifference();
-			if (totalDif == 0) return 0;
-			return ((totalDif - (totalDif - getIdleDifference())) / totalDif) * 100;
-		}
-		
-		public float getIoWaitPercent() {
-			float totalDif = getTotalDifference();
-			if (totalDif == 0) return 0;
-			return ((totalDif - (totalDif - getIoWaitDifference())) / totalDif) * 100;
-		}
-		
-		public float getIntrPercent() {
-			float totalDif = getTotalDifference();
-			if (totalDif == 0) return 0;
-			return ((totalDif - (totalDif - getIntrDifference())) / totalDif) * 100;
-		}
-		
-		public float getSoftIrqPercent() {
-			float totalDif = getTotalDifference();
-			if (totalDif == 0) return 0;
-			return ((totalDif - (totalDif - getSoftIrqDifference())) / totalDif) * 100;
-		}
-		
-		/** User + Nice */
-		public float getUserTotalPercent() {
-			float idleDif = getIdleTotalDifference();
-			float systemDif = getSystemTotalDifference();
-			float divisor = getUserTotalDifference() + idleDif + systemDif;
-			if (divisor == 0) return 0;
-			return ((divisor - idleDif - systemDif) / divisor) * 100;
-		}
-		
-//		/** User + Nice */
-//		public float getUserTotalPercent() {
-//			float divisor = mUserPrevious + mNicePrevious;
-//			if (divisor == 0) return 0;
-//			return ((mUser - mUserPrevious) + (mNice - mNicePrevious))
-//				/ divisor * 100;
-//		}
-		
-		/** System + Intr + SoftIrq */
-		public float getSystemTotalPercent() {
-			float idleDif =  getIdleTotalDifference();
-			float userDif = getUserTotalDifference();
-			float divisor = getSystemTotalDifference() + idleDif + userDif;
-			if (divisor == 0) return 0;
-			return ((divisor - idleDif - userDif) / divisor) * 100;
-		}
-		
-//		/** System + Intr + SoftIrq */
-//		public float getSystemTotalPercent() {
-//			float divisor = mSystemPrevious + mIntrPrevious + mSoftIrqPrevious;
-//			if (divisor == 0) return 0;
-//			return ((mSystem - mSystemPrevious) 
-//				+ (mIntr - mIntrPrevious) 
-//				+ (mSoftIrq - mSoftIrqPrevious))
-//				/ divisor * 100;
-//		}
-		
-		/** Idle + IoWait */
-		public float getIdleTotalPercent() {
-			float userDif = getUserTotalDifference();
-			float systemDif = getSystemTotalDifference();
-			float divisor = getIdleTotalDifference() + userDif + systemDif;
-			if (divisor == 0) return 0;
-			return ((divisor - userDif - systemDif) / divisor) * 100;
-		}
-		
-//		/** Idle + IoWait */
-//		public float getIdleTotalPercent() {
-//			float divisor = mIdlePrevious + mIoWaitPrevious;
-//			if (divisor == 0) return 0;
-//			return ((mIdle - mIdlePrevious) + (mIoWait - mIoWaitPrevious))
-//					/ divisor * 100;
-//		}
-		
-		public float getTotalPercent() {
-			float divisor = getTotalDifference();
-			if (divisor == 0) return 0;
-			return ((divisor - getIdleTotalDifference()) / divisor) * 100;
-		}
-		
-//		public float getTotalPercent() {
-//			float divisor = mUserPrevious
-//					+ mNicePrevious
-//					+ mSystemPrevious
-//					+ mIdlePrevious
-//					+ mIoWaitPrevious
-//					+ mIntrPrevious 
-//					+ mSoftIrqPrevious;
-//			if (divisor == 0) return 0;
-//			return ((mUser - mUserPrevious)
-//				+ (mNice - mNicePrevious)
-//				+ (mSystem - mSystemPrevious) 
-//				+ (mIdle - mIdlePrevious)
-//				+ (mIoWait - mIoWaitPrevious)
-//				+ (mIntr - mIntrPrevious)				
-//				+ (mSoftIrq - mSoftIrqPrevious))
-//				/ divisor * 100;
-//		}
 
-		public long getUser() {
-			return mUser;
-		}
-		
-		public long getNice() {
-			return mNice;
-		}
-		
-		public long getSystem() {
-			return mSystem;
-		}
-		
-		public long getIdle() {
-			return mIdle;
-		}
-		
-		public long getIoWait() {
-			return mIoWait;
-		}
-		
-		public long getIntr() {
-			return mIntr;
-		}
-		
-		public long getSoftIrq() {
-			return mSoftIrq;
-		}
-		
+		// typical combinations
 		/** User + Nice */
-		public long getUserTotal() {
-			return mUser + mNice;
-		}
-		
+		public final long userTotal;
 		/** System + Intr + SoftIrq */
-		public long getSystemTotal() {
-			return mSystem + mIntr + mSoftIrq;
-		}
-		
+		public final long systemTotal;
 		/** Idle + IoWait */
-		public long getIdleTotal() {
-			return mIdle + mIoWait;
-		}
-		
-		public long getTotal() {
-			return mUser + mNice + mSystem
-				+ mIdle + mIoWait + mIntr + mSoftIrq;
-		}
-		
-		
-		
-		
-		
-		
-		public long getUserPrevious() {
-			return mUserPrevious;
-		}
-		
-		public long getNicePrevious() {
-			return mNicePrevious;
-		}
-		
-		public long getSystemPrevious() {
-			return mSystemPrevious;
-		}
-		
-		public long getIdlePrevious() {
-			return mIdlePrevious;
-		}
-		
-		public long getIoWaitPrevious() {
-			return mIoWaitPrevious;
-		}
-		
-		public long getIntrPrevious() {
-			return mIntrPrevious;
-		}
-		
-		public long getSoftIrqPrevious() {
-			return mSoftIrqPrevious;
-		}
-		
-		/** User + Nice */
-		public long getUserTotalPrevious() {
-			return mUserPrevious + mNicePrevious;
-		}
-		
-		/** System + Intr + SoftIrq */
-		public long getSystemTotalPrevious() {
-			return mSystemPrevious + mIntrPrevious + mSoftIrqPrevious;
-		}
-		
-		/** Idle + IoWait */
-		public long getIdleTotalPrevious() {
-			return mIdlePrevious + mIoWaitPrevious;
-		}
-		
-		public long getTotalPrevious() {
-			return mUserPrevious + mNicePrevious + mSystemPrevious
-				+ mIdlePrevious + mIoWaitPrevious + mIntrPrevious + mSoftIrqPrevious;
-		}
-		
-		
-		
-		public long getUserDifference() {
-			return (mUser - mUserPrevious);
-		}
-		
-		public long getNiceDifference() {
-			return (mNice - mNicePrevious);
-		}
-		
-		public long getSystemDifference() {
-			return (mSystem - mSystemPrevious);
-		}
-		
-		public long getIdleDifference() {
-			return (mIdle - mIdlePrevious);
-		}
-		
-		public long getIoWaitDifference() {
-			return (mIoWait - mIoWaitPrevious);
-		}
-		
-		public long getIntrDifference() {
-			return (mIntr - mIntrPrevious);
-		}
-		
-		public long getSoftIrqDifference() {
-			return (mSoftIrq - mSoftIrqPrevious);
-		}
-		
-		/** User + Nice */
-		public long getUserTotalDifference() {
-			return (mUser - mUserPrevious) + (mNice - mNicePrevious);
-		}
-		
-		/** System + Intr + SoftIrq */
-		public long getSystemTotalDifference() {
-			return (mSystem - mSystemPrevious) + (mIntr - mIntrPrevious) + (mSoftIrq - mSoftIrqPrevious);
-		}
-		
-		/** Idle + IoWait */
-		public long getIdleTotalDifference() {
-			return (mIdle - mIdlePrevious) + (mIoWait - mIoWaitPrevious);
-		}
-		
-		public long getTotalDifference() {
-			return (mUser - mUserPrevious) 
-				+ (mNice - mNicePrevious) + (mSystem - mSystemPrevious)
-				+ (mIdle - mIdlePrevious) + (mIoWait - mIoWaitPrevious)
-				+ (mIntr - mIntrPrevious) + (mSoftIrq - mSoftIrqPrevious);
+		public final long idleTotal;
+		public final long total;
+
+
+
+		public Stat(String line) {
+			String[] parts = WHITESPACE.split(line);
+			id = parts[0];
+			user = Long.valueOf(parts[1]);
+			nice = Long.valueOf(parts[2]);
+			system = Long.valueOf(parts[3]);
+			idle = Long.valueOf(parts[4]);
+			ioWait = Long.valueOf(parts[5]);
+			intr = Long.valueOf(parts[6]);
+			softIrq = Long.valueOf(parts[7]);
+
+			userTotal = user + nice;
+			systemTotal = system + intr + softIrq;
+			idleTotal = idle + ioWait;
+			total = userTotal + systemTotal + idleTotal;
 		}
 	}
 
-	@Override
-	public void start() {
-		if (mIsActive) return;
-		mUpdateTask.start();
-		mIsActive = true;
+	/** CPU usage as a percent */
+	public static class Usage {
+		public final double user;
+		public final double nice;
+		public final double system;
+		public final double idle;
+		public final double ioWait;
+		public final double intr;
+		public final double softIrq;
+		/** User + Nice */
+		public final double userTotal;
+		/** System + Intr + SoftIrq */
+		public final double systemTotal;
+		/** Idle + IoWait */
+		public final double idleTotal;
+		public final double total;
+
+		public Usage(Stat cur, Stat prev) {
+            double totalDiff = 0;
+            if (cur != null && prev != null) {
+                totalDiff = cur.total - prev.total;
+            }
+			if (cur == null || prev == null || totalDiff == 0) {
+				user = 0;
+				nice = 0;
+				system = 0;
+				idle = 0;
+				ioWait = 0;
+				intr = 0;
+				softIrq = 0;
+				userTotal = 0;
+				systemTotal = 0;
+				idleTotal = 0;
+				total = 0;
+			} else {
+				user = (totalDiff - (totalDiff - (cur.user - prev.user)) / totalDiff) * 100;
+				nice = (totalDiff - (totalDiff - (cur.nice - prev.nice)) / totalDiff) * 100;
+				system = (totalDiff - (totalDiff - (cur.system - prev.system)) / totalDiff) * 100;
+				idle = (totalDiff - (totalDiff - (cur.idle - prev.idle)) / totalDiff) * 100;
+				ioWait = (totalDiff - (totalDiff - (cur.ioWait - prev.ioWait)) / totalDiff) * 100;
+				intr = (totalDiff - (totalDiff - (cur.intr - prev.intr)) / totalDiff) * 100;
+				softIrq = (totalDiff - (totalDiff - (cur.softIrq - prev.softIrq)) / totalDiff) * 100;
+
+				userTotal = user + nice;
+				systemTotal = system + intr + softIrq;
+				idleTotal = idle + ioWait;
+				total = userTotal + systemTotal + idleTotal;
+			}
+		}
 	}
-	
-	@Override
-	public void stop() {
-		
-		mUpdateTask.stop();
-		mIsActive = false;
-	}
+
+    public static class Info {
+        public final Map<String, String> info;
+        public final String model;
+        public final float bogoMips;
+        public final String features;
+        public final String cpuImplementer;
+        public final String cpuArchitecture;
+        public final String cpuVariant;
+        public final String cpuPart;
+        public final String cpuRevision;
+        public final String hardware;
+        public final String revision;
+        public final String serial;
+        public final String device;
+        public final String radio;
+        public final String msmHardware;
+        public final int cores;
+
+        private static final Pattern delim = Pattern.compile(":");
+
+        private Info() {
+            List<String> lines = ShellHelper.cat(CPU_INFO_PROC);
+            info = parseLines(lines);
+
+            String model = info.get("model name");
+            if (TextUtils.isEmpty(model)) model = info.get("Processor");
+            this.model = model;
+
+            float bogoMips = 0;
+            try { bogoMips = Float.valueOf(info.get("BogoMIPS")); }
+            catch (Exception ignored) {}
+            this.bogoMips = bogoMips;
+
+            features = info.get("Features");
+            cpuImplementer = info.get("CPU implementer");
+            cpuArchitecture = info.get("CPU architecture");
+            cpuVariant = info.get("CPU variant");
+            cpuPart = info.get("CPU part");
+            cpuRevision = info.get("CPU revision");
+
+            hardware = info.get("Hardware");
+            revision = info.get("Revision");
+            serial = info.get("Serial");
+            device = info.get("Device");
+            radio = info.get("Radio");
+            msmHardware = info.get("MSM Hardware");
+
+            int cores = 0;
+            try { cores = Integer.valueOf(info.get("processor")) + 1; }
+            catch (Exception ignored) {}
+            this.cores = cores;
+        }
+
+        private Map<String, String> parseLines(List<String> lines) {
+            Map<String, String> info = new HashMap<>(lines.size());
+            String[] parts;
+            for (String line : lines) {
+                parts = delim.split(line, 2);
+                if (parts.length == 2) {
+                    info.put(parts[0].trim(), parts[1].trim());
+                }
+            }
+            return info;
+        }
+    }
 }
