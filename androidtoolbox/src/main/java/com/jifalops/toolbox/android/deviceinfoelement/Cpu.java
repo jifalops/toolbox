@@ -3,8 +3,6 @@ package com.jifalops.toolbox.android.deviceinfoelement;
 import android.text.TextUtils;
 import android.util.Log;
 
-import com.gstv.android.logging.GSLog;
-import com.gstv.dtv.player.Constants;
 import com.jifalops.toolbox.android.util.ShellHelper;
 
 import java.io.File;
@@ -28,7 +26,13 @@ public class Cpu {
     private final Info info;
 	private final List<LogicalCpu> cores = new ArrayList<>();
 
-	public Cpu() {
+
+    private static Cpu instance;
+    public static Cpu getInstance() {
+        if (instance == null) instance = new Cpu();
+        return instance;
+    }
+	private Cpu() {
         info = new Info();
         checkCores();
         updateStats();
@@ -113,7 +117,7 @@ public class Cpu {
 		
 		/** A file pointing to a logical cpu structure
 		 * in the file system, such as /sys/devices/system/cpu/cpu0. */
-		public LogicalCpu(File dir, int id) {
+		private LogicalCpu(File dir, int id) {
 			this.dir = dir;
 			this.id = id;
             maxFrequency = checkMaxFrequency();
@@ -282,7 +286,7 @@ public class Cpu {
 
 
 
-		public Stat(String line) {
+		private Stat(String line) {
 			String[] parts = WHITESPACE.split(line);
 			id = parts[0];
 			user = Long.valueOf(parts[1]);
@@ -317,7 +321,7 @@ public class Cpu {
 		public final double idleTotal;
 		public final double total;
 
-		public Usage(Stat cur, Stat prev) {
+		private Usage(Stat cur, Stat prev) {
             double totalDiff = 0;
             if (cur != null && prev != null) {
                 totalDiff = cur.total - prev.total;

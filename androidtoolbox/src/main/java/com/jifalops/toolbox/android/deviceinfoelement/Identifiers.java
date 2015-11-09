@@ -7,7 +7,6 @@ import android.telephony.TelephonyManager;
 
 import com.deviceinfoapp.util.ShellHelper;
 
-import java.util.LinkedHashMap;
 import java.util.List;
 
 

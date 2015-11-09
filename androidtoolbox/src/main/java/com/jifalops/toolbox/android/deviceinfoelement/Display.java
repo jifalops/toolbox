@@ -4,14 +4,11 @@ import android.content.Context;
 import android.content.res.Configuration;
 import android.graphics.ImageFormat;
 import android.graphics.PixelFormat;
-import android.os.Build;
 import android.util.DisplayMetrics;
 import android.view.WindowManager;
 
 import com.jifalops.toolbox.android.R;
 import com.deviceinfoapp.util.ShellHelper;
-
-import java.util.LinkedHashMap;
 
 public class Display extends AbsElement {
 

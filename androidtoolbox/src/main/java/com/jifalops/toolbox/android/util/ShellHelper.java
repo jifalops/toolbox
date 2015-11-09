@@ -98,7 +98,7 @@ public class ShellHelper {
         		Log.d(TAG, "Property does not have exactly 2 parts.");
         		continue;
         	}
-        	props.put(parts[0], parts[1]);
+        	props.put(parts[0].trim(), parts[1].trim());
         }
         return props;
     }
