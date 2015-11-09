@@ -1,123 +1,64 @@
 package com.jifalops.toolbox.android.deviceinfoelement;
 
-import android.content.Context;
+import com.jifalops.toolbox.android.util.ShellHelper;
 
-import com.deviceinfoapp.DeviceInfo;
-import com.deviceinfoapp.util.BackgroundRepeatingTask;
-import com.deviceinfoapp.util.Convert;
-import com.deviceinfoapp.util.ShellHelper;
-
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
+/**
+ * @see <a href="https://www.centos.org/docs/5/html/5.2/Deployment_Guide/s2-proc-meminfo.html">https://www.centos.org/docs/5/html/5.2/Deployment_Guide/s2-proc-meminfo.html</a>
+ */
+public class Ram {
+	private static final String TAG = Ram.class.getSimpleName();
 
-public class Ram extends ActiveElement {
-	private static final String LOG_TAG = Ram.class.getSimpleName();
+    public static final String UNITS = "kB";
 
     private static final String MEMINFO_PROC = "meminfo";
-    private static final String MEMINFO_DELIM = ":";
-    private static final String KEY_TOTAL = "MemTotal";
-    private static final String KEY_FREE = "MemFree";
+    private static final Pattern DELIM = Pattern.compile(":");
+    private static final Pattern SPACE = Pattern.compile(" ");
 
-    public static final int FREQUENCY_HIGH = 1000;
-    public static final int FREQUENCY_MEDIUM = 2000;
-    public static final int FREQUENCY_LOW = 3000;
+	public final Map<String, String> memInfo;
+	public final long total;
+	public final long free;
+	public final long cached;
+	public final long swapTotal;
+	public final long swapFree;
+	public final long swapCached;
+	public final long kernelCache;
+	public final long vTotal;
+	public final long vUsed;
+	public final long dirty;        // waiting to be written to disk
 
-    private static final int ACTIVE_ACTIONS = 1;
-    public static final int ACTION_UPDATE = 0;
 
-	public interface Callbacks extends ActiveElement.Callbacks {
-		void onUpdated(LinkedHashMap<String, String> meminfo);
+    public Ram() {
+        memInfo = checkMemInfo();
+        total = parse(memInfo.get("MemTotal"));
+        free = parse(memInfo.get("MemFree"));
+        cached = parse(memInfo.get("Cached"));
+        swapTotal = parse(memInfo.get("SwapTotal"));
+        swapFree = parse(memInfo.get("SwapFree"));
+        swapCached = parse(memInfo.get("SwapCached"));
+        kernelCache = parse(memInfo.get("Slab"));
+        vTotal = parse(memInfo.get("VMallocTotal"));
+        vUsed = parse(memInfo.get("VMallocUsed"));
+        dirty = parse(memInfo.get("Dirty"));
 	}
 
-	private LinkedHashMap<String, String> mMeminfo;
-	private BackgroundRepeatingTask mUpdateTask;
-    private int mUpdateFrequency;
-
-	public Ram(Context context, Callbacks callbacks) {
-		super(context, callbacks);
-
-        mUpdateFrequency = FREQUENCY_MEDIUM;
-		mMeminfo = new LinkedHashMap<String, String>();
-		mUpdateTask = new BackgroundRepeatingTask(new Runnable() {			
-			@Override
-			public void run() {
-				updateMeminfo();
-			}
-		});		
-		mUpdateTask.setInterval(mUpdateFrequency);
-		mUpdateTask.setCallback(new Runnable() {			
-			@Override
-			public void run() {
-                setActionTime(ACTION_UPDATE);
-				((Callbacks) mCallbacks).onUpdated(new LinkedHashMap<String, String>(mMeminfo));
-			}
-		});
-
-        setActiveActionCount(ACTIVE_ACTIONS);
-	}
-	
-	/** Get the current meminfo from /proc */
-	public boolean updateMeminfo() {
-        // Throttle set by frequency (because it's not a system event but my own)
-        List<String> meminfo = ShellHelper.getProc(MEMINFO_PROC);
-        if (meminfo == null || meminfo.isEmpty()) return false;        
-        String[] parts = null;
-        mMeminfo.clear();
-        for (String s : meminfo) {
-        	parts = s.split(MEMINFO_DELIM);
-        	if (parts.length != 2) continue;
-        	mMeminfo.put(parts[0].trim(), parts[1].trim());
+    private Map<String, String> checkMemInfo() {
+        List<String> lines = ShellHelper.getProc(MEMINFO_PROC);
+        Map<String, String> info = new HashMap<>(lines.size());
+        String[] parts;
+        for (String line : lines) {
+            parts = DELIM.split(line, 2);
+            if (parts.length == 2) info.put(parts[0].trim(), parts[1].trim());
         }
-               
-        return !mMeminfo.isEmpty();
+        return info;
     }
-	
-	public Map<String, String> getMeminfo() {
-		return new LinkedHashMap<String, String>(mMeminfo);
-	}
-	
-	public String getMeminfo(String key) {
-        if (key == null || !mMeminfo.containsKey(key)) return null;
-        return mMeminfo.get(key);        
+
+    private long parse(String value) {
+        try { return Long.valueOf(SPACE.split(value)[0]); }
+        catch (Exception e) { return 0; }
     }
-	
-	public String getTotal() {
-		return getMeminfo(KEY_TOTAL);
-    }
-	
-	public String getFree() {
-        return getMeminfo(KEY_FREE);
-    }
-	
-	public String getUsagePercent() {
-		long total = getLongFromValue(getTotal());		
-		long using = total - getLongFromValue(getFree());
-		return Convert.round(DeviceInfo.getPercent(using, total), 1);
-	}
-	
-	public long getLongFromValue(String value) {
-		if (value == null) return 0;
-		String[] parts = value.split("\\s+");
-		if (parts == null || parts.length == 0) return 0;
-		try { return Long.valueOf(parts[0]); }
-		catch (NumberFormatException e) {
-			return 0;
-		}
-	}
-	
-	@Override
-	public void start() {
-		if (mIsActive) return;
-		mUpdateTask.start();
-		mIsActive = true;
-	}
-	
-	@Override
-	public void stop() {
-		
-		mUpdateTask.stop();
-		mIsActive = false;
-	}
 }
