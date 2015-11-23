@@ -1,9 +1,8 @@
 package com.jifalops.toolbox.android.deviceinfoelement;
 
+import android.os.Build;
 import android.text.TextUtils;
 import android.util.Log;
-
-import com.jifalops.toolbox.android.util.ShellHelper;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -14,7 +13,7 @@ import java.util.regex.Pattern;
 
 //TODO exact current frequency??
 public class Cpu {
-	static final String TAG = Cpu.class.getSimpleName();
+	static final String TAG = /*Constants.BASE_TAG +*/ Cpu.class.getSimpleName();
 
     private static final String CPU_INFO_LOCATION = "/sys/devices/system/cpu/";
     private static final String CPU_INFO_PROC = "cpuinfo";
@@ -38,10 +37,10 @@ public class Cpu {
         updateStats();
 	}
 
-    public Usage checkUsage() {
-        updateStats();
-        return new Usage(stat, prevStat);
-    }
+//    public Usage checkUsage() {
+//        updateStats();
+//        return new Usage(stat, prevStat);
+//    }
 
     public Info getInfo() {
         return info;
@@ -49,6 +48,12 @@ public class Cpu {
 
     public List<LogicalCpu> getCores() {
         return cores;
+    }
+
+    public int availableCores() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1
+                ? Runtime.getRuntime().availableProcessors()
+                : cores.size();
     }
 
     /**
@@ -84,12 +89,13 @@ public class Cpu {
                     LogicalCpu cpu = cores.get(id);
                     cpu.prevStat = cpu.stat;
                     cpu.stat = stat;
+                    cpu.stat.timeInFreqs = cpu.checkTimeInFrequency();
                 }
             }
 		}
 	}
 	
-	public class LogicalCpu {
+	public static class LogicalCpu {
         private static final String MAX_FREQUENCY = 		"/cpufreq/cpuinfo_max_freq";
         private static final String MIN_FREQUENCY = 		"/cpufreq/cpuinfo_min_freq";
         private static final String CURRENT_FREQUENCY = 	"/cpufreq/scaling_cur_freq";
@@ -129,11 +135,6 @@ public class Cpu {
             transitionLatency = checkTransitionLatency();
 		}
 
-        public Usage checkUsage() {
-            updateStats();
-            return new Usage(stat, prevStat);
-        }
-
         /** Get the current frequency in MHz */
         public int checkCurrentFrequency() {
             int freq = 0;
@@ -163,12 +164,12 @@ public class Cpu {
             return (float) ((long) checkTotalTransitions() * (long) checkTransitionLatency() / 1E9);
         }
 
-        /** Get a list of the total time (in Jiffies) spent at each frequency (in MHz) */
-        public int[][] checkTimeInFrequency() {
+        /** Get a list of the total user time (in Jiffies) spent at each frequency (in MHz) */
+        public Map<Integer, Integer> checkTimeInFrequency() {
             List<String> list = ShellHelper.cat(dir.getAbsolutePath() + TIME_IN_FREQUENCY);
             int len = list.size();
+            Map<Integer, Integer> times = new HashMap<>(len);
             if (len > 0) {
-                int[][] times = new int[len][2];
                 String[] parts;
                 for (int i = 0; i < len; ++i) {
                     parts = WHITESPACE.split(list.get(i));
@@ -176,16 +177,12 @@ public class Cpu {
                         Log.e(TAG, "time in state did not have exactly 2 parts.");
                         continue;
                     }
-                    int freq = 0, time = 0;
                     try {
-                        freq = Integer.valueOf(parts[0]) / 1000;
-                        time = Integer.valueOf(parts[1]);
+                        times.put(Integer.valueOf(parts[0]) / 1000, Integer.valueOf(parts[1]));
                     } catch (NumberFormatException ignored) {}
-                    times[i][0] = freq;
-                    times[i][1] = time;
                 }
-                return times;
-            } else return new int[0][0];
+            }
+            return times;
         }
 		
 		/** Get the maximum frequency in MHz */
@@ -266,6 +263,7 @@ public class Cpu {
 
 	public static class Stat {
         public final String id;
+        public final long time = System.nanoTime();
 		public final long user;
 		public final long nice;
 		public final long system;
@@ -284,7 +282,7 @@ public class Cpu {
 		public final long idleTotal;
 		public final long total;
 
-
+        private Map<Integer, Integer> timeInFreqs;
 
 		private Stat(String line) {
 			String[] parts = WHITESPACE.split(line);
@@ -304,56 +302,97 @@ public class Cpu {
 		}
 	}
 
-	/** CPU usage as a percent */
-	public static class Usage {
-		public final double user;
-		public final double nice;
-		public final double system;
-		public final double idle;
-		public final double ioWait;
-		public final double intr;
-		public final double softIrq;
-		/** User + Nice */
-		public final double userTotal;
-		/** System + Intr + SoftIrq */
-		public final double systemTotal;
-		/** Idle + IoWait */
-		public final double idleTotal;
-		public final double total;
-
-		private Usage(Stat cur, Stat prev) {
-            double totalDiff = 0;
-            if (cur != null && prev != null) {
-                totalDiff = cur.total - prev.total;
-            }
-			if (cur == null || prev == null || totalDiff == 0) {
-				user = 0;
-				nice = 0;
-				system = 0;
-				idle = 0;
-				ioWait = 0;
-				intr = 0;
-				softIrq = 0;
-				userTotal = 0;
-				systemTotal = 0;
-				idleTotal = 0;
-				total = 0;
-			} else {
-				user = (totalDiff - (totalDiff - (cur.user - prev.user)) / totalDiff) * 100;
-				nice = (totalDiff - (totalDiff - (cur.nice - prev.nice)) / totalDiff) * 100;
-				system = (totalDiff - (totalDiff - (cur.system - prev.system)) / totalDiff) * 100;
-				idle = (totalDiff - (totalDiff - (cur.idle - prev.idle)) / totalDiff) * 100;
-				ioWait = (totalDiff - (totalDiff - (cur.ioWait - prev.ioWait)) / totalDiff) * 100;
-				intr = (totalDiff - (totalDiff - (cur.intr - prev.intr)) / totalDiff) * 100;
-				softIrq = (totalDiff - (totalDiff - (cur.softIrq - prev.softIrq)) / totalDiff) * 100;
-
-				userTotal = user + nice;
-				systemTotal = system + intr + softIrq;
-				idleTotal = idle + ioWait;
-				total = userTotal + systemTotal + idleTotal;
-			}
-		}
-	}
+	/** CPU usage as a percent.
+     * This is harder than it looks.
+     * @see <a href="https://source.android.com/reference/com/android/tradefed/device/CpuStatsCollector.CpuStats.html#getEstimatedMhz()">CpuStats</a>*/
+//	public static class Usage {
+//		public final double user;
+//		public final double nice;
+//		public final double system;
+//		public final double idle;
+//		public final double ioWait;
+//		public final double intr;
+//		public final double softIrq;
+//		/** User + Nice */
+//		public final double userTotal;
+//		/** System + Intr + SoftIrq */
+//		public final double systemTotal;
+//		/** Idle + IoWait */
+//		public final double idleTotal;
+//
+//        /** Estimated frequency in MHz */
+//        public final double freq;
+//
+//        /** Used MHz percentage */
+//        public final double freqPercentage;
+//
+//		private Usage(Stat cur, Stat prev) {
+//            double totalDiff = 0;
+//            if (cur != null && prev != null) {
+//                totalDiff = cur.total - prev.total;
+//            }
+//			if (cur == null || prev == null || totalDiff == 0 ||
+//                    cur.timeInFreqs == null || prev.timeInFreqs == null) {
+//				user = 0;
+//				nice = 0;
+//				system = 0;
+//				idle = 0;
+//				ioWait = 0;
+//				intr = 0;
+//				softIrq = 0;
+//				userTotal = 0;
+//				systemTotal = 0;
+//				idleTotal = 0;
+//                freq = 0;
+//                freqPercentage = 0;
+//			} else {
+//                int len = cur.timeInFreqs.size();
+//                Diff d = new Diff(cur, prev);
+//                double utotal = 0, stotal = 0;
+//                int dfreq, dtime;
+//                // total user time spent at each frequency
+//                Map<Integer, Integer> times = new HashMap<>(len);
+//                for (Map.Entry<Integer, Integer> e : cur.timeInFreqs.entrySet()) {
+//                    dfreq = e.getKey();
+//                    dtime = e.getValue() - prev.timeInFreqs.get(dfreq);
+////                    times.put(e.getKey(), e.getValue() - prev.timeInFreqs.get(e.getKey()));
+//                    utotal += ((d.userTotal - d.idleTotal) / d.userTotal) * ((times))
+//                }
+//                userTotal = ((d.userTotal - d.idleTotal) / d.userTotal) * ((times))
+//
+//
+//			}
+//		}
+//
+//        static class Diff {
+//            final long user;
+//            final long nice;
+//            final long system;
+//            final long idle;
+//            final long ioWait;
+//            final long intr;
+//            final long softIrq;
+//
+//            final long userTotal;
+//            final long systemTotal;
+//            final long idleTotal;
+//            final long total;
+//            Diff(Stat cur, Stat prev) {
+//                user = cur.user - prev.user;
+//                nice = cur.nice - prev.nice;
+//                system = cur.system - prev.system;
+//                idle = cur.idle - prev.idle;
+//                ioWait = cur.ioWait - prev.ioWait;
+//                intr = cur.intr - prev.intr;
+//                softIrq = cur.softIrq - prev.softIrq;
+//
+//                userTotal = cur.userTotal - prev.userTotal;
+//                systemTotal = cur.systemTotal - prev.systemTotal;
+//                idleTotal = cur.idleTotal - prev.idleTotal;
+//				total = cur.total - prev.total;
+//            }
+//        }
+//	}
 
     public static class Info {
         public final Map<String, String> info;
