@@ -1,5 +1,7 @@
 package com.jifalops.toolbox.android.util;
 
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.Locale;
 
 /**
@@ -7,6 +9,13 @@ import java.util.Locale;
  */
 public class Format {
     private Format() {}
+
+    public static final String DATE = "yyyy-MM-dd";
+    public static final String TIME_24 = "HH:mm:ss";
+    public static final String TIME_24_MILLIS = "HH:mm:ss.SSS";
+    public static final String DATETIME = DATE + " " + TIME_24;
+    public static final String DATETIME_MILLIS = DATE + " " + TIME_24_MILLIS;
+    public static final String DATETIME_FILENAME = DATE + "_" + "HH-mm-ss";
 
     // Converting from nanoseconds
     public static final long NANOS_PER_MICRO    = 1000L;
@@ -49,5 +58,14 @@ public class Format {
 
     public static String duration(double seconds) {
         return duration((long) (seconds * 1e9));
+    }
+
+
+    public static String time(long millisSinceEpoch, String format) {
+        return new SimpleDateFormat(format, Locale.US).format(new Date(millisSinceEpoch));
+    }
+
+    public static String time(String format) {
+        return time(System.currentTimeMillis(), format);
     }
 }
