@@ -10,8 +10,8 @@ import java.util.regex.Pattern;
 /**
  * @see <a href="https://www.centos.org/docs/5/html/5.2/Deployment_Guide/s2-proc-meminfo.html">https://www.centos.org/docs/5/html/5.2/Deployment_Guide/s2-proc-meminfo.html</a>
  */
-public class Ram {
-	private static final String TAG = Ram.class.getSimpleName();
+public class RamState {
+	private static final String TAG = RamState.class.getSimpleName();
 
     public static final String UNITS = "kB";
 
@@ -19,6 +19,7 @@ public class Ram {
     private static final Pattern DELIM = Pattern.compile(":");
     private static final Pattern SPACE = Pattern.compile(" ");
 
+    // All values are in kB
 	public final Map<String, String> memInfo;
 	public final long total;
 	public final long free;
@@ -32,7 +33,7 @@ public class Ram {
 	public final long dirty;        // waiting to be written to disk
 
 
-    public Ram() {
+    public RamState() {
         memInfo = checkMemInfo();
         total = parse(memInfo.get("MemTotal"));
         free = parse(memInfo.get("MemFree"));

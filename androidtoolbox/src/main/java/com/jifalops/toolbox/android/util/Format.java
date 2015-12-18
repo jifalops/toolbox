@@ -17,6 +17,16 @@ public class Format {
     public static final String DATETIME_MILLIS = DATE + " " + TIME_24_MILLIS;
     public static final String DATETIME_FILENAME = DATE + "_" + "HH-mm-ss";
 
+    public static final long BYTES_PER_KB = 1000;
+    public static final long BYTES_PER_MB = 1000 * BYTES_PER_KB;
+    public static final long BYTES_PER_GB = 1000 * BYTES_PER_MB;
+    public static final long BYTES_PER_TB = 1000 * BYTES_PER_GB;
+
+    public static final long BYTES_PER_KiB = 1024;
+    public static final long BYTES_PER_MiB = 1024 * BYTES_PER_KiB;
+    public static final long BYTES_PER_GiB = 1024 * BYTES_PER_MiB;
+    public static final long BYTES_PER_TiB = 1024 * BYTES_PER_GiB;
+    
     // Converting from nanoseconds
     public static final long NANOS_PER_MICRO    = 1000L;
     public static final long NANOS_PER_MILLI    = 1000   * NANOS_PER_MICRO;
@@ -61,11 +71,65 @@ public class Format {
     }
 
 
-    public static String time(long millisSinceEpoch, String format) {
+    public static String dateTime(long millisSinceEpoch, String format) {
         return new SimpleDateFormat(format, Locale.US).format(new Date(millisSinceEpoch));
     }
 
-    public static String time(String format) {
-        return time(System.currentTimeMillis(), format);
+    public static String dateTime(String format) {
+        return dateTime(System.currentTimeMillis(), format);
+    }
+
+    public static String bytes(long bytes) {
+        return bytes(bytes, true);
+    }
+
+    public static String bytes(long bytes, boolean base10) {
+        String label;
+        double value = bytes;
+        int decimalPlaces;
+        if (base10) {
+            if (bytes < BYTES_PER_KB) {
+                label = "B";
+                decimalPlaces = 0;
+            } else if (bytes < BYTES_PER_MB) {
+                label = "KB";
+                value /= BYTES_PER_KB;
+                decimalPlaces = 3;
+            } else if (bytes < BYTES_PER_GB) {
+                label = "MB";
+                value /= BYTES_PER_MB;
+                decimalPlaces = 6;
+            } else if (bytes < BYTES_PER_TB) {
+                label = "GB";
+                value /= BYTES_PER_GB;
+                decimalPlaces = 9;
+            } else {
+                label = "TB";
+                value /= BYTES_PER_TB;
+                decimalPlaces = 12;
+            }
+        } else {
+            if (bytes < BYTES_PER_KiB) {
+                label = "B";
+                decimalPlaces = 0;
+            } else if (bytes < BYTES_PER_MiB) {
+                label = "KiB";
+                value /= BYTES_PER_KiB;
+                decimalPlaces = 3;
+            } else if (bytes < BYTES_PER_GiB) {
+                label = "MiB";
+                value /= BYTES_PER_MiB;
+                decimalPlaces = 6;
+            } else if (bytes < BYTES_PER_TiB) {
+                label = "GiB";
+                value /= BYTES_PER_GiB;
+                decimalPlaces = 9;
+            } else {
+                label = "TiB";
+                value /= BYTES_PER_TiB;
+                decimalPlaces = 12;
+            }
+        }
+        return String.format(Locale.US, "%." + decimalPlaces + "f %s", value, label);
     }
 }
